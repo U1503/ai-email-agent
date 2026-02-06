@@ -7,7 +7,7 @@ agent = build_agent()
 
 @app.get("/")
 def home():
-    return {"message": "Email Agent Running"}
+    return {"message": "AI Email Agent Running 🚀"}
 
 @app.get("/run-agent")
 def run_agent():
@@ -27,4 +27,5 @@ def send_final_email(data: dict):
         subject=data.get("subject"),
         body=data.get("reply")
     )
+
     return {"status": result}

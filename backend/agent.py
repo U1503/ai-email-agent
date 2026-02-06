@@ -1,59 +1,130 @@
-from typing import TypedDict
-from langgraph.graph import StateGraph
-from backend.llm import get_llm
-from backend.gmail_tools import send_email
+# backend/agent.py
 
-llm = get_llm()
+import json
+from backend.llm import generate_response
+from backend.core.logger import logger
 
-class EmailState(TypedDict):
-    subject: str
-    body: str
-    category: str
-    reply: str
-    status: str
 
-# Step 1: Classify
-def classify_email(state: EmailState):
-    prompt = f"""
-    Classify this email into: Complaint, Inquiry, Spam, or Other.
-
-    Subject: {state['subject']}
-    Body: {state['body']}
+# ---------------------------
+# EMAIL CLASSIFICATION
+# ---------------------------
+def classify_email(subject: str, body: str) -> dict:
     """
-    response = llm.invoke(prompt)
-    return {"category": response.content.strip()}
-
-# Step 2: Generate reply
-def generate_reply(state: EmailState):
-    prompt = f"""
-    Write a professional email reply.
-
-    Subject: {state['subject']}
-    Body: {state['body']}
+    Classifies email into Spam, Complaint, Job, or Inquiry.
+    Returns structured JSON output.
     """
-    response = llm.invoke(prompt)
-    clean_reply = response.content.replace("\\n", "\n")
-    return {"reply": clean_reply.strip()}
+
+    prompt = f"""
+You are an AI email classification system.
+
+Classify the following email into ONE of these categories:
+- Spam
+- Complaint
+- Job
+- Inquiry
+
+Return ONLY valid JSON in this exact format:
+
+{{
+    "category": "Spam | Complaint | Job | Inquiry",
+    "confidence": 0.0,
+    "reason": "Short explanation"
+}}
+
+Email:
+Subject: {subject}
+Body: {body}
+"""
+
+    try:
+        result = generate_response(prompt)
+
+        # Parse JSON safely
+        parsed = json.loads(result)
+
+        logger.info(f"Classification result: {parsed}")
+        return parsed
+
+    except json.JSONDecodeError:
+        logger.error("Failed to parse classification response as JSON.")
+        return {
+            "category": "Unknown",
+            "confidence": 0.0,
+            "reason": "Model returned invalid JSON."
+        }
+
+    except Exception as e:
+        logger.error(f"Classification error: {e}")
+        return {
+            "category": "Error",
+            "confidence": 0.0,
+            "reason": str(e)
+        }
 
 
-# Step 3: Send reply
-def send_reply(state: EmailState):
-    result = send_email(
-        to="customer@example.com",
-        subject="Re: " + state["subject"],
-        body=state["reply"]
-    )
-    return {"status": result}
+# ---------------------------
+# REPLY GENERATION
+# ---------------------------
+def generate_reply(subject: str, body: str) -> str:
+    """
+    Generates a professional email reply.
+    """
 
-# Build graph
+    prompt = f"""
+You are a professional AI email assistant.
+
+Write a polite, concise, and professional email reply.
+
+Rules:
+- Use formal tone
+- Keep it under 200 words
+- Do NOT hallucinate details
+- If email is spam, warn the user politely
+- Sign the email as: Support Team
+
+Email:
+Subject: {subject}
+Body: {body}
+"""
+
+    try:
+        reply = generate_response(prompt)
+        logger.info("Reply generated successfully.")
+        return reply
+
+    except Exception as e:
+        logger.error(f"Reply generation failed: {e}")
+        return "Unable to generate reply at the moment."
+
+
+# ---------------------------
+# AGENT BUILDER
+# ---------------------------
 def build_agent():
-    graph = StateGraph(EmailState)
+    class Agent:
+        def invoke(self, data: dict):
+            subject = data.get("subject", "")
+            body = data.get("body", "")
 
-    graph.add_node("classify", classify_email)
-    graph.add_node("reply", generate_reply)
+            logger.info("Starting agent pipeline...")
 
-    graph.set_entry_point("classify")
-    graph.add_edge("classify", "reply")
+            # Step 1: Classification
+            logger.info("Classifying email...")
+            classification = classify_email(subject, body)
 
-    return graph.compile()
+            # Step 2: Reply generation
+            logger.info("Generating reply...")
+            reply = generate_reply(subject, body)
 
+            logger.info("Agent pipeline completed.")
+
+            return {
+                "subject": subject,
+                "body": body,
+                "category": classification["category"],
+                "confidence": classification["confidence"],
+                "reason": classification["reason"],
+                "reply": reply
+            }
+
+    return Agent()
